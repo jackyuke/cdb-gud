@@ -217,8 +217,8 @@ containing the executable being debugged."
 				(if (string-match 
 					 (concat 
 					  "^[0-9a-zA-Z]*" ;; optional frame number
-					  " *[0-9a-zA-Z]+" ;; instruction pointer
-					  " [0-9a-zA-Z]+ " ;; return address
+					  " *[0-9a-zA-Z`]+" ;; instruction pointer
+					  " [0-9a-zA-Z`]+ " ;; return address
 					  ".+!.+\\"	;; module!function
 					  ;;"+0x[0-9a-zA-Z]+" ;; offset (optional, ab: removing)
 					  " \\[\\(.*\\) @ \\([0-9]+\\)\\]" ;; file @ line
@@ -350,18 +350,44 @@ containing the executable being debugged."
     ;;(sleep-for 5)
     output))
 
+(defvar cdb-source-window 1)
+(defun find-file-in-window(f)
+  (if (file-exists-p f)
+      (progn
+        (let ((buf (find-buffer-visiting f))
+              )
+          (winum-select-window-by-number cdb-source-window)
+          (if (and buf t)
+              (switch-to-buffer buf)
+            (find-file-noselect f t)
+            ))
+        )
+    (find-file-noselect f t)
+    )
+  )
+
 (defun gud-cdb-find-file (f)
   (save-excursion
     (let ((realf (gud-cdb-file-name f)))
 	  (if (file-exists-p (or realf f))
 		  (if realf
-			  (find-file-noselect realf t)
+                                        ;(find-file-noselect realf t)
+              (find-file-in-window realf)
 			(find-file-noselect f 'nowarn)
 			)
         ))))
 
+(defvar gud-cdb-cmd-hook nil)
+
+(defun gud-cdb-call-cmd-hook ()
+  ;; ab: my hack for remote  (append args (cons "-c" (cons "l+*;l-s" (cons "-lines" nil)))))
+  (loop for i in gud-cdb-cmd-hook append (funcall i)) 
+  ;;  (debug)
+  )
+
 (defun cdb-simple-send (proc string)
   (comint-send-string proc (concat string "\n")) ;; this first: error writing to buf otherwise
+  (gud-cdb-call-cmd-hook)
   (if (string-match "^[ \t]*[Qq][ \t]*" string)
       (kill-buffer gud-comint-buffer)
 	))
@@ -395,7 +421,7 @@ and source-file directory for your debugger."
 
 (defun gud-cdb-goto-stackframe (text token indent)
   "Goto the stackframe described by TEXT, TOKEN, and INDENT."
-  (speedbar-with-attached-buffer
+  (dframe-with-attached-buffer
    (gud-display-line (nth 2 token) (string-to-number (nth 3 token)))
    (gud-basic-call (concat ".frame " (nth 1 token)))))
 
@@ -471,6 +497,10 @@ BUFFER is the GUD buffer in which to run the command."
       (progn
         (setq gud-cdb-complete-in-progress nil)
         string)))
+
+(defun cdb-fetch-stackframes()
+  (gud-cdb-get-stackframe gud-comint-buffer)
+    )
 
 (defun gud-speedbar-buttons (buffer)
   "Create a speedbar display based on the current state of GUD.
@@ -571,15 +601,36 @@ off the specialized speedbar mode."
 	(cdb (format "cdb -p %i" pid))
 	(rename-buffer (format "*gud-%s*" (car (string-split "\\s-+" (car exepidpair) 1))) t)))
 
+(defvar cdb-platform 64)
 (defun cdbSetIP ()
   "set instruction pointer to current point. if you are in source code and want to change the current line to mark"
   (interactive)
-  (gud-call (format "r eip = %s" (cdbLineNoKill))))
+  (if (= cdb-platform 64)
+      (gud-call (format "r rip = %s" (cdbLineNoKill)))
+    (gud-call (format "r eip = %s" (cdbLineNoKill)))
+    ))
 (defalias 'eip 'cdbSetIP)
 
 (defun cdbLineNoKill ()
   "get current line in cdb format"
   (concat "`" (buffer-file-name) ":" (number-to-string (count-lines (point-min) (1+ (point)))) "`"))
+
+
+(defun line-no-kill ()
+  "get current line in cdb format"
+  (concat (file-name-nondirectory (buffer-file-name)) ":" (number-to-string (count-lines (point-min) (1+ (point)))) ))
+
+(defun cdb-go-line()
+  (interactive)
+  (let ((libname)
+        (bp-str (udu-line-no-kill))
+        (current-buffer-name (buffer-name)))
+    (setq libname (read-from-minibuffer "lib name:" ""))
+    (if (> (length libname) 0)
+        (setq bp-str (concat libname "!" bp-str)))
+    (gud-call (format "g `%s`" bp-str))
+    )
+  )
 
 (defun cdbLine ()
   "kill current line in cdb format"
@@ -646,4 +697,5 @@ off the specialized speedbar mode."
 (if (require 'auto-complete nil t)
 	(add-hook 'cdb-mode-hook 'cdb-ac-mode-init))
 
+(provide 'cdb-gud)
 ;;; cdb-gud.el ends here
